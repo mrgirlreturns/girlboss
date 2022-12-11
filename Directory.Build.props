@@ -1,0 +1,13 @@
+<Project>
+    
+    <PropertyGroup>
+        <Authors>vwTable</Authors>
+        <Copyright>Copyright © $(Authors) $([System.DateTime]::Now.Year)</Copyright>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <Deterministic>True</Deterministic>
+        <GenerateAssemblyInfo>True</GenerateAssemblyInfo>
+    </PropertyGroup>
+    
+</Project>
