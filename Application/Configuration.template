@@ -1,0 +1,75 @@
+﻿{
+  "Token": "0123456789",
+  "Announcer": {
+    "Index": "0123456789",
+    "Publications": {
+      "Discord": {
+        "Servers": [
+          {
+            "Id": "0123456789",
+            "Name": "mrgirl",
+            "Channels": [
+              {
+                "Id": "0123456789",
+                "Name": "announcements",
+                "Roles": [
+                  {
+                    "Id": "0123456789",
+                    "Name": "mrgirlreturns ping"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "Conservator": {
+    "Subscriptions": {
+      "Discord": {
+        "Servers": [
+          {
+            "Id": "0123456789",
+            "Name": "mrgirl"
+          }
+        ]
+      }
+    },
+    "Publications": {
+      "Discord": {
+        "Servers": [
+          {
+            "Id": "0123456789",
+            "Name": "mrgirl",
+            "Channels": [
+              {
+                "Id": "0123456789",
+                "Name": "girlboss"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "Janitor": {
+    "Subscriptions": {
+      "Discord": {
+        "Servers": [
+          {
+            "Id": "0123456789",
+            "Name": "mrgirl",
+            "Channels": [
+              {
+                "Id": "0123456789",
+                "Name": "uncivil-chat",
+                "Trigger": "2023-01-05T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

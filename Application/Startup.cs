@@ -1,10 +1,8 @@
 ﻿using System;
-using System.Linq;
-using System.Reflection;
+using System.Net.Http;
 using System.Threading.Tasks;
 
 using Discord;
-using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.Configuration;
 
@@ -14,13 +12,57 @@ public class Startup
 {
     public Startup()
     {
-        this.config = new ConfigurationBuilder()
-            .AddUserSecrets<Startup>()
-            .Build()
-            .GetSection("Configuration")
-            .Get<Configuration>()!;
+        var builder = new ConfigurationBuilder()
+            .AddJsonFile(
+                path: "Configuration.json",
+                optional: false,
+                reloadOnChange: true
+            );
 
-        this.client = new DiscordSocketClient(
+        this.configuration = builder.Build();
+
+        this.discordClient = Startup.ConfigureDiscordClient(configuration);
+        this.httpClient = Startup.ConfigureHttpClient(configuration);
+
+        this.announcer = Startup.ConfigureAnnouncer(configuration, discordClient, httpClient);
+        this.conservator = Startup.ConfigureConservator(configuration, discordClient);
+        this.janitor = Startup.ConfigureJanitor(configuration, discordClient);
+
+        this.discordClient.Ready += this.OnReadyAsync;
+    }
+
+    public static Announcer.Service ConfigureAnnouncer(IConfigurationRoot configuration, DiscordSocketClient discordClient, HttpClient httpClient)
+    {
+        var index = configuration.GetSection("Announcer:Index")
+            .Get<String>();
+
+        var publications = configuration.GetSection("Announcer:Publications")
+            .Get<Announcer.Configuration.Publications>();
+
+        return new Announcer.Service(index, publications)
+        { 
+            DiscordClient = discordClient,
+            HttpClient    = httpClient
+        };
+    }
+
+    public static Conservator.Service ConfigureConservator(IConfigurationRoot configuration, DiscordSocketClient discordClient)
+    {
+        var publications = configuration.GetSection("Conservator:Publications")
+            .Get<Conservator.Configuration.Publications>();
+
+        var subscriptions = configuration.GetSection("Conservator:Subscriptions")
+            .Get<Conservator.Configuration.Subscriptions>();
+
+        return new Conservator.Service(publications, subscriptions)
+        {
+            DiscordClient = discordClient
+        };
+    }
+
+    public static DiscordSocketClient ConfigureDiscordClient(IConfigurationRoot configuration)
+    {
+        var discordClient = new DiscordSocketClient(
             config: new DiscordSocketConfig()
             {
                 GatewayIntents = GatewayIntents.Guilds
@@ -30,70 +72,62 @@ public class Startup
             }
         );
 
-        this.client.Log += this.OnLogAsync;
-        this.client.MessageReceived += this.OnMessageReceivedAsync;
-        this.client.MessageUpdated  += this.OnMessageUpdatedAsync;
-        this.client.MessageDeleted  += this.OnMessageDeletedAsync;
+        discordClient.Log += Startup.OnLogAsync;
 
-        this.commandService = new CommandService(
-            config: new CommandServiceConfig()
-            {
-                DefaultRunMode = RunMode.Async
-            }
-        );
-
-        this.commandService.Log += this.OnLogAsync;
-
-        // this.client.MessageReceived += this.HandleCommandsAsync;
+        return discordClient;
     }
 
-    protected readonly CommandService commandService;
+    public static HttpClient ConfigureHttpClient(IConfigurationRoot configuration)
+    {
+        return new HttpClient();
+    }
 
-    protected readonly Configuration config;
+    public static Janitor.Service ConfigureJanitor(IConfigurationRoot configuration, DiscordSocketClient discordClient)
+    {
+        var subscriptions = configuration.GetSection("Janitor:Subscriptions")
+            .Get<Janitor.Configuration.Subscriptions>();
 
-    protected readonly DiscordSocketClient client;
+        return new Janitor.Service(subscriptions)
+        {
+            DiscordClient = discordClient
+        };
+    }
+
+    protected readonly IConfigurationRoot configuration;
+
+    protected readonly Announcer.Service announcer;
+    
+    protected readonly Conservator.Service conservator;
+    
+    protected readonly Janitor.Service janitor;
+
+    protected readonly DiscordSocketClient discordClient;
+
+    protected readonly HttpClient httpClient;
 
     public static Task Main() => new Startup().MainAsync();
 
     public async Task MainAsync()
     {
-        await this.commandService.AddModulesAsync(Assembly.GetEntryAssembly(), null);
+        var token = this.configuration
+            .GetSection("Token")
+            .Get<String>();
 
-        await this.client.LoginAsync(TokenType.Bot, this.config.Token);
-        await this.client.StartAsync();
-        await this.client.SetStatusAsync(UserStatus.Online);
+        await this.discordClient.LoginAsync(TokenType.Bot, token);
+        await this.discordClient.StartAsync();
+        await this.discordClient.SetStatusAsync(UserStatus.Online);
 
         await Task.Delay(-1);
     }
 
-    protected async Task HandleCommandsAsync(SocketMessage message)
-    {
-        var command = message as SocketUserMessage;
-
-        if (command is null) { return; }
-
-        var context = new SocketCommandContext(this.client, command);
-
-        var index = 0;
-        if (command.HasCharPrefix('!', ref index))
-        {
-            var result = await this.commandService.ExecuteAsync(context, index, null);
-
-            if (!result.IsSuccess && result.Error != CommandError.UnknownCommand)
-            {
-                await context.Channel.SendMessageAsync(result.ErrorReason);
-            }
-        }
-    }
-
-    protected async Task OnLogAsync(LogMessage message)
+    protected static async Task OnLogAsync(LogMessage message)
     {
         Console.WriteLine(message.Message);
 
         var exception = message.Exception;
 
         if (exception is null) { return; }
-        
+
         Console.WriteLine(exception.Message);
 
         while (exception.InnerException is not null)
@@ -104,117 +138,10 @@ public class Startup
         }
     }
 
-    protected async Task OnMessageReceivedAsync(SocketMessage message)
+    protected async Task OnReadyAsync()
     {
-        if (!message.Author.IsBot)
-        {
-            var origin = message.Channel as SocketGuildChannel;
+        Task.Run(this.announcer.InvokeAsync);
 
-            var summary = new EmbedBuilder()
-            {
-                Color = Color.Green,
-                Author = new EmbedAuthorBuilder()
-                {
-                    Name = $"{message.Id}  •  {origin.Name}",
-                    Url = Startup.GetMessageUrl(origin.Guild.Id, origin.Id, message.Id)
-                },
-                Description = message.Content,
-                Footer = new EmbedFooterBuilder()
-                {
-                    Text = $"{message.Author.Id}  •  {Startup.GetAccount(message.Author)}",
-                    IconUrl = message.Author.GetAvatarUrl()
-                },
-                Timestamp = DateTimeOffset.Now
-            };
-
-            await this.ArchiveMessageAsync(
-                guildId: origin.Guild.Id,
-                embed:   summary.Build()
-            );
-        }
+        Task.Run(this.janitor.InvokeAsync);
     }
-
-    protected async Task OnMessageUpdatedAsync(Cacheable<IMessage, UInt64> before, SocketMessage after, ISocketMessageChannel channel)
-    {
-        if (!after.Author.IsBot)
-        {
-            var origin = channel as SocketGuildChannel;
-
-            var summary = new EmbedBuilder()
-            {
-                Color = Color.Gold,
-                Author = new EmbedAuthorBuilder()
-                {
-                    Name = $"{after.Id}  •  {origin.Name}",
-                    Url = Startup.GetMessageUrl(origin.Guild.Id, origin.Id, after.Id)
-                },
-                Description = after.Content,
-                Footer = new EmbedFooterBuilder()
-                {
-                    Text = $"{after.Author.Id}  •  {Startup.GetAccount(after.Author)}",
-                    IconUrl = after.Author.GetAvatarUrl()
-                },
-                Timestamp = DateTimeOffset.Now
-            };
-
-            await this.ArchiveMessageAsync(
-                guildId: origin.Guild.Id,
-                embed:   summary.Build()
-            );
-        }
-    }
-
-    protected async Task OnMessageDeletedAsync(Cacheable<IMessage, UInt64> before, Cacheable<IMessageChannel, UInt64> channel)
-    {
-        var origin = channel.Value as SocketGuildChannel;
-
-        var message = await before.GetOrDownloadAsync();
-
-        var summary = new EmbedBuilder()
-        {
-            Color = Color.Red,
-            Author = new EmbedAuthorBuilder()
-            {
-                Name = $"{before.Id}  •  {origin.Name}",
-                Url = Startup.GetMessageUrl(origin.Guild.Id, origin.Id, before.Id)
-            },
-            Footer = new EmbedFooterBuilder()
-            {
-                Text = "N/A"
-            },
-            Timestamp = DateTimeOffset.Now
-        };
-
-        if (message is not null)
-        {
-            summary.Description = message.Content;
-
-            summary.Footer = new EmbedFooterBuilder()
-            {
-                Text = $"{message.Author.Id}  •  {Startup.GetAccount(message.Author)}",
-                IconUrl = message.Author.GetAvatarUrl()
-            };
-        }
-
-        await this.ArchiveMessageAsync(
-            guildId: origin.Guild.Id,
-            embed:   summary.Build()
-        );
-    }
-
-    public async Task ArchiveMessageAsync(UInt64 guildId, Embed embed)
-    {
-        var channelId = this.config.GuildArchives[guildId];
-
-        await this.client
-            .Guilds
-            .Single(g => g.Id == guildId)
-            .TextChannels
-            .First(c => c.Id == channelId)
-            .SendMessageAsync(embed: embed);
-    }
-
-    protected static String GetAccount(IUser author) => $"{author.Username}#{author.DiscriminatorValue}";
-
-    protected static String GetMessageUrl(UInt64 guildId, UInt64 channelId, UInt64 messageId) => $"https://discord.com/channels/{guildId}/{channelId}/{messageId}";
 }
